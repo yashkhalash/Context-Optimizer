@@ -1,0 +1,30 @@
+{
+  "name": "context-optimizer",
+  "version": "1.0.0",
+  "description": "Scan your project repositories, extract feature summaries, and query them before building something new — so you reuse what already exists instead of rebuilding it.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "bin": {
+    "context-optimizer": "./bin/cli.js"
+  },
+  "scripts": {
+    "scan": "node bin/cli.js scan",
+    "query": "node bin/cli.js query",
+    "list": "node bin/cli.js list",
+    "serve": "node bin/cli.js serve"
+  },
+  "keywords": [
+    "code-reuse",
+    "repo-scanner",
+    "feature-index",
+    "context",
+    "claude",
+    "anthropic"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
