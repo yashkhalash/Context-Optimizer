@@ -42,10 +42,18 @@ Or just run it directly with `node bin/cli.js ...` without installing.
 node bin/cli.js scan /path/to/old-project-1 --name project-1
 node bin/cli.js scan /path/to/old-project-2 --name project-2
 node bin/cli.js scan .                          # scan the current folder
+node bin/cli.js scan https://github.com/user/repo.git --name repo  # or a git URL
 ```
 
 Run this once per repo you want indexed. Re-run it any time a repo changes —
 it replaces that repo's old entries with a fresh scan.
+
+A git URL (`https://...git`, or a github/gitlab/bitbucket link, or `git@...`)
+is shallow-cloned to a temp directory, scanned, then the clone is deleted —
+useful when running the web UI somewhere (e.g. a hosted deployment) that
+doesn't have your local filesystem paths available. Note that file paths
+shown in query results point at that now-deleted temp clone, so they're only
+useful as a pointer back to the repo itself, not a live local path.
 
 **Optional: richer summaries with Gemini**
 

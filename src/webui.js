@@ -6,6 +6,7 @@ const { loadIndex, upsertRepo, removeRepo, saveIndex } = require('./store');
 const { search } = require('./search');
 const { scanRepo } = require('./scanner');
 const { buildFeatureCards } = require('./summarizer');
+const { cloneRepo, isGitUrl } = require('./gitClone');
 
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'cli.js');
 
@@ -154,7 +155,7 @@ const PAGE_TEMPLATE = (dataJson) => `<!DOCTYPE html>
     <div class="stats" id="stats"></div>
   </header>
   <div class="toolbar-row">
-    <input id="scanPath" type="text" placeholder="Path to repo to scan (e.g. /home/you/projects/my-app)" />
+    <input id="scanPath" type="text" placeholder="Local path or git URL to scan (e.g. /home/you/app or https://github.com/user/repo.git)" />
     <input id="scanName" type="text" placeholder="Repo name (optional)" />
     <label><input id="scanLlm" type="checkbox" /> use LLM</label>
     <button class="btn-primary" id="scanBtn" onclick="runScan()">Scan repo</button>
@@ -472,22 +473,44 @@ function startServer(port = 4848) {
     } else if (req.url === '/api/scan' && req.method === 'POST') {
       let body = '';
       req.on('data', chunk => { body += chunk; });
-      req.on('end', () => {
+      req.on('end', async () => {
+        let repoPath, repoName, useLLM;
         try {
-          const { repoPath, repoName, useLLM } = JSON.parse(body || '{}');
-          if (!repoPath || typeof repoPath !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'repoPath is required' }));
-            return;
-          }
-          const resolved = path.resolve(repoPath);
-          if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `Not a directory: ${resolved}` }));
-            return;
-          }
+          ({ repoPath, repoName, useLLM } = JSON.parse(body || '{}'));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid request body' }));
+          return;
+        }
+        if (!repoPath || typeof repoPath !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'repoPath is required' }));
+          return;
+        }
 
-          const scanResult = scanRepo(resolved, repoName || null);
+        let targetDir, cleanupClone = null;
+        if (isGitUrl(repoPath)) {
+          try {
+            const clone = await cloneRepo(repoPath);
+            targetDir = clone.dir;
+            repoName = repoName || clone.repoName;
+            cleanupClone = clone.cleanup;
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: e.message }));
+            return;
+          }
+        } else {
+          targetDir = path.resolve(repoPath);
+          if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Not a directory: ${targetDir}` }));
+            return;
+          }
+        }
+
+        try {
+          const scanResult = scanRepo(targetDir, repoName || null);
           res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
           res.write(JSON.stringify({ type: 'start', total: scanResult.modules.length }) + '\n');
 
@@ -495,19 +518,15 @@ function startServer(port = 4848) {
             res.write(JSON.stringify({ type: 'progress', ...progress }) + '\n');
           };
 
-          buildFeatureCards(scanResult, { useLLM: Boolean(useLLM), onProgress })
-            .then(cards => {
-              upsertRepo(scanResult, cards);
-              res.write(JSON.stringify({ type: 'done', repoName: scanResult.repoName, cardCount: cards.length }) + '\n');
-              res.end();
-            })
-            .catch(e => {
-              res.write(JSON.stringify({ type: 'error', error: e.message }) + '\n');
-              res.end();
-            });
+          const cards = await buildFeatureCards(scanResult, { useLLM: Boolean(useLLM), onProgress });
+          upsertRepo(scanResult, cards);
+          res.write(JSON.stringify({ type: 'done', repoName: scanResult.repoName, cardCount: cards.length }) + '\n');
+          res.end();
         } catch (e) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Invalid request body' }));
+          res.write(JSON.stringify({ type: 'error', error: e.message }) + '\n');
+          res.end();
+        } finally {
+          if (cleanupClone) cleanupClone();
         }
       });
     } else {

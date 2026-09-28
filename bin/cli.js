@@ -7,6 +7,7 @@ const { upsertRepo, loadIndex, removeRepo } = require('../src/store');
 const { search } = require('../src/search');
 const { startServer } = require('../src/webui');
 const { getIndexPath, loadDotEnv } = require('../src/config');
+const { cloneRepo, isGitUrl } = require('../src/gitClone');
 
 loadDotEnv();
 
@@ -37,8 +38,10 @@ function printHelp() {
 Context Optimizer — find reusable features across your own repos before building new ones.
 
 Usage:
-  context-optimizer scan <path> [--name <repoName>] [--llm] [--no-llm]
-      Scan a repository and add/update its features in the index.
+  context-optimizer scan <path|git-url> [--name <repoName>] [--llm] [--no-llm]
+      Scan a repository (local path, or an https://.../repo.git or git@ URL,
+      which is shallow-cloned to a temp dir and removed after scanning) and
+      add/update its features in the index.
       --llm forces use of the Gemini API (needs GEMINI_API_KEY) for
       richer summaries. Without an API key, a heuristic summarizer is used.
       If GEMINI_API_KEY is set, LLM mode is used automatically — pass
@@ -75,30 +78,47 @@ async function main() {
 
   switch (command) {
     case 'scan': {
-      const targetPath = positional[0] || '.';
-      const repoName = flags.name || null;
-      console.log(`\n📦 Scanning ${path.resolve(targetPath)} ...`);
-      const scanResult = scanRepo(targetPath, repoName);
-      console.log(`   Found ${scanResult.totalCodeFiles} code file(s) across ${scanResult.modules.length} module(s).`);
+      const target = positional[0] || '.';
+      let repoName = flags.name || null;
+      let targetPath = target;
+      let cleanupClone = null;
 
-      const useLLM = !flags['no-llm'] && Boolean(flags.llm || process.env.GEMINI_API_KEY);
-      if (flags.llm && !process.env.GEMINI_API_KEY) {
-        console.log('   ⚠️  --llm passed but GEMINI_API_KEY is not set. Falling back to heuristic mode.');
-      } else if (useLLM) {
-        console.log('   🤖 Generating feature summaries with Gemini...');
+      if (isGitUrl(target)) {
+        console.log(`\n📦 Cloning ${target} ...`);
+        const clone = await cloneRepo(target);
+        targetPath = clone.dir;
+        repoName = repoName || clone.repoName;
+        cleanupClone = clone.cleanup;
       } else {
-        console.log('   🧩 Generating feature summaries heuristically (set GEMINI_API_KEY for richer summaries)...');
+        console.log(`\n📦 Scanning ${path.resolve(targetPath)} ...`);
       }
 
-      const onProgress = useLLM
-        ? ({ index, total, module, status }) => {
-            const icon = status === 'llm' ? '✓' : '↺';
-            process.stdout.write(`   [${index}/${total}] ${icon} ${module}${status === 'fallback' ? ' (fallback)' : ''}\n`);
-          }
-        : undefined;
+      let scanResult, cards;
+      try {
+        scanResult = scanRepo(targetPath, repoName);
+        console.log(`   Found ${scanResult.totalCodeFiles} code file(s) across ${scanResult.modules.length} module(s).`);
 
-      const cards = await buildFeatureCards(scanResult, { useLLM, onProgress });
-      upsertRepo(scanResult, cards);
+        const useLLM = !flags['no-llm'] && Boolean(flags.llm || process.env.GEMINI_API_KEY);
+        if (flags.llm && !process.env.GEMINI_API_KEY) {
+          console.log('   ⚠️  --llm passed but GEMINI_API_KEY is not set. Falling back to heuristic mode.');
+        } else if (useLLM) {
+          console.log('   🤖 Generating feature summaries with Gemini...');
+        } else {
+          console.log('   🧩 Generating feature summaries heuristically (set GEMINI_API_KEY for richer summaries)...');
+        }
+
+        const onProgress = useLLM
+          ? ({ index, total, module, status }) => {
+              const icon = status === 'llm' ? '✓' : '↺';
+              process.stdout.write(`   [${index}/${total}] ${icon} ${module}${status === 'fallback' ? ' (fallback)' : ''}\n`);
+            }
+          : undefined;
+
+        cards = await buildFeatureCards(scanResult, { useLLM, onProgress });
+        upsertRepo(scanResult, cards);
+      } finally {
+        if (cleanupClone) cleanupClone();
+      }
 
       console.log(`\n✅ Indexed "${scanResult.repoName}" — ${cards.length} feature card(s) saved.`);
       console.log(`   Index file: ${getIndexPath()}\n`);
