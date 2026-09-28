@@ -183,7 +183,7 @@ async function main() {
     }
 
     case 'serve': {
-      const port = flags.port ? parseInt(flags.port, 10) : 4848;
+      const port = flags.port ? parseInt(flags.port, 10) : parseInt(process.env.PORT, 10) || 4848;
       startServer(port);
       break;
     }

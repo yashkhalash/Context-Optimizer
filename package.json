@@ -11,7 +11,8 @@
     "scan": "node bin/cli.js scan",
     "query": "node bin/cli.js query",
     "list": "node bin/cli.js list",
-    "serve": "node bin/cli.js serve"
+    "serve": "node bin/cli.js serve",
+    "start": "node bin/cli.js serve"
   },
   "keywords": [
     "code-reuse",
